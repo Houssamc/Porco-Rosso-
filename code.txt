@@ -1,0 +1,673 @@
+# Imports
+import pygame, sys
+from plane_spirtes import plane_import_folder, enemy_plane_import_folder, explosion_import_folder
+
+# Initialize pygame and mixer
+pygame.init()
+pygame.mixer.init()
+
+# Set screen dimensions
+SCREEN_WIDTH, SCREEN_HEIGHT = 1500, 600
+
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption('Porco Rosso')
+
+# music and sounds
+main_fx = pygame.mixer.Sound('../sounds/Dog Fight.mp3')
+main_fx.set_volume(0.5)
+main_fx.play(loops=-1)
+shot_fx = pygame.mixer.Sound('../sounds/shot.mp3')
+shot_fx.set_volume(0.25)
+
+# bullet image
+fat_bullet_image = pygame.image.load('../assets/Bullets/shoot/bullet.png').convert_alpha()
+bullet_image = pygame.transform.scale(fat_bullet_image, (20, 20)).convert_alpha()
+# background images
+sky = pygame.image.load('../images/Layers/sky.png').convert_alpha()
+sky_resize = pygame.transform.scale(sky, (SCREEN_WIDTH, SCREEN_HEIGHT))
+far_clouds = pygame.image.load('../images/Layers/far-clouds.png').convert_alpha()
+far_clouds_resize = pygame.transform.scale(far_clouds, (SCREEN_WIDTH, SCREEN_HEIGHT))
+near_clouds = pygame.image.load('../images/Layers/near-clouds.png').convert_alpha()
+near_clouds_resize = pygame.transform.scale(near_clouds, (SCREEN_WIDTH, SCREEN_HEIGHT))
+far_mountains = pygame.image.load('../images/Layers/far-mountains.png').convert_alpha()
+far_mountains_resize = pygame.transform.scale(far_mountains, (SCREEN_WIDTH, SCREEN_HEIGHT))
+mountains = pygame.image.load('../images/Layers/mountains.png').convert_alpha()
+mountains_resize = pygame.transform.scale(mountains, (SCREEN_WIDTH, SCREEN_HEIGHT))
+trees = pygame.image.load('../images/Layers/trees.png').convert_alpha()
+trees_resize = pygame.transform.scale(trees, (SCREEN_WIDTH, SCREEN_HEIGHT))
+
+# Set background scroll
+bg_scroll = 0
+
+# Create frame rate
+clock = pygame.time.Clock()
+FPS = 60
+
+# Font
+font = pygame.font.Font('../font/Stardew Valley.ttf', 50)
+
+# Explosions Sprite Group
+explosions_group = pygame.sprite.Group()
+
+# Explosion class
+class Explosion(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.import_explosion_assets()
+        self.frame_index = 0
+        self.animation_speed = 1
+        self.image = self.animations['explosion'][int(self.frame_index)]
+        self.rect = self.image.get_rect()
+        self.rect.center = [x, y]
+        self.status = 'explosion'
+        self.is_animating = True
+
+    def import_explosion_assets(self):
+        explosion_path = '../assets/Bullets/'
+        self.animations = {'explosion': []}
+
+        for animation in self.animations.keys():
+            full_path = explosion_path + animation
+            self.animations[animation] = explosion_import_folder(full_path)
+
+    def animate(self):
+        animation = self.animations[self.status]
+
+        # loop over frame index
+        self.frame_index += self.animation_speed
+        if self.frame_index >= len(animation):
+            self.is_animating = False  # Stop animating once all frames have been shown
+            self.frame_index = len(animation) - 1
+
+        self.image = animation[int(self.frame_index)]
+
+    def update(self):
+        self.animate()
+        if not self.is_animating:
+            self.kill()  # Remove the explosion sprite from the group when the animation is done
+
+# Bullet class
+class Bullet(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.image = bullet_image
+        self.rect = self.image.get_rect()
+        self.rect.center = [x, y]
+        self.direction = pygame.math.Vector2(1, 0)
+        self.speed = 15
+        self.plane_facing_right = True
+        self.collided = False
+
+        # Attacking rectangle matches size of bullet width and height
+        self.attack_rect_width = 20
+        self.attack_rect_height = 20
+
+    def attack(self, enemy):
+        # attack_rect combined with attack_rect 2 offset the y-axis so plane can only be attacked directly not from top or bottom
+        attack_rect = pygame.Rect(self.rect.centerx, self.rect.y - 120, self.rect.width, self.rect.height)
+        attack_rect2 = pygame.Rect(self.rect.centerx, self.rect.y + 120, self.rect.width, self.rect.height)
+        if attack_rect.colliderect(enemy.rect) and attack_rect2.colliderect(enemy.rect):
+            enemy.health -= 1
+            # Create an explosion at the enemy's position
+            explosions_group.add(Explosion(enemy.rect.centerx  - 150, enemy.rect.centery))
+            self.collided = True
+
+
+    def update(self):
+        # update horizontal position based on direction and speed
+        self.rect.x += self.direction.x * self.speed
+        self.attack(enemy)
+
+        # update bullets direction based on the planes facing direction
+        if self.plane_facing_right:
+            self.direction = pygame.math.Vector2(1, 0)
+        else:
+            self.direction = pygame.math.Vector2(-1, 0)
+
+        # Update attacking rectangle position relative to the bullets' position
+        self.attack_rect = pygame.Rect(self.rect.centerx - self.attack_rect_width // 2,
+                                       self.rect.centery - self.attack_rect_height // 2,
+                                       self.attack_rect_width,
+                                       self.attack_rect_height)
+
+    def draw(self, surface):
+        surface.blit(self.image, self.rect)
+
+# Enemy Bullet class
+class EnemyBullet(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.image = bullet_image
+        self.rect = self.image.get_rect()
+        self.rect.center = [x, y]
+        self.direction = pygame.math.Vector2(1, 0)
+        self.speed = 10
+        self.plane_facing_right = False
+        self.collided = False
+
+        # Attacking Rectangle matches the size of bullet width and height
+        self.attack_rect_width = 20
+        self.attack_rect_height = 20
+
+    def attack(self, player):
+        # attack_rect and attack_rect2
+        attack_rect = pygame.Rect(self.rect.centerx, self.rect.y - 120, self.rect.width, self.rect.height)
+        attack_rect2 = pygame.Rect(self.rect.centerx, self.rect.y + 120, self.rect.width, self.rect.height)
+        if attack_rect.colliderect(player.rect) and attack_rect2.colliderect(player.rect):
+            player.health -= 1
+            explosions_group.add(Explosion(player.rect.centerx + 150, player.rect.centery))
+            self.collided = True
+
+    def update(self):
+        # update horizontal position based on direction and speed
+        self.rect.x += self.direction.x * self.speed
+        self.attack(player)
+
+        # update bullet direction based on planes facing direction
+        if not self.plane_facing_right:
+            self.direction = pygame.math.Vector2(-1, 0)
+        else:
+            self.direction = pygame.math.Vector2(1, 0)
+
+        # update attacking rectangle relation to bullets position
+        self.attack_rect = pygame.Rect(self.rect.centerx - self.attack_rect_width // 2,
+                                       self.rect.centery - self.attack_rect_height // 2,
+                                       self.attack_rect_width,
+                                       self.attack_rect_height)
+
+    def draw(self, surface):
+        surface.blit(self.image, self.rect)
+
+# Plane class
+class Plane(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.import_plane_assets()
+        self.frame_index = 0
+        self.animation_speed = 0.15
+        self.image = self.animations['fly'][self.frame_index]
+        self.rect = self.image.get_rect()
+
+        # Set position
+        self.rect.center = [x, y]
+
+        # Movement
+        self.direction = pygame.math.Vector2(0, 0)
+        self.speed = 5
+        self.gravity = 0.5
+        self.y_velocity = 0
+
+        # Health
+        self.alive = True
+        self.health = 100
+
+        # Status
+        self.status = 'fly'
+        self.facing_right = True
+
+        # Bullets Sprite Group
+        self.bullets_group = pygame.sprite.Group()
+
+        # Track Space Bar Press
+        self.space_pressed = False
+
+        # Shooting Sound
+        self.shoot = shot_fx
+
+    def import_plane_assets(self):
+        # path to plane assets
+        plane_path = '../assets/2D Animated Aircraft/Plane6/'
+        self.animations = {'fly': []}
+
+        for animation in self.animations.keys():
+            full_path = plane_path + animation
+            self.animations[animation] = plane_import_folder(full_path)
+
+    def animate(self):
+        animation = self.animations[self.status]
+
+        # loop over frame index
+        self.frame_index += self.animation_speed
+        if self.frame_index >= len(animation):
+            self.frame_index = 0
+
+        # lets the players turn around
+        image = animation[int(self.frame_index)]
+        if self.facing_right:
+            self.image = image
+        else:
+            flip_img = pygame.transform.flip(image, True, False)
+            self.image = flip_img
+
+    def move(self, screen_width, screen_height):
+        # variables
+        GRAVITY = 0.2
+        dx = 0
+        dy = 0
+        keys = pygame.key.get_pressed()
+
+        # horizontal movement
+        if keys[pygame.K_RIGHT]:
+            self.direction.x = 2
+            self.y_velocity = 0
+            self.facing_right = True
+        elif keys[pygame.K_LEFT]:
+            self.direction.x = -2
+            self.y_velocity = 0
+            self.facing_right = False
+
+        # vertical movement
+        elif keys[pygame.K_UP]:
+            self.direction.y = -5
+            self.y_velocity = -5
+        elif keys[pygame.K_DOWN]:
+            self.direction.y = 5
+            self.y_velocity = 5
+        else:
+            self.direction.x = 0
+            self.direction.y = 0
+            self.y_velocity = 0
+
+        # gravity
+        self.y_velocity += GRAVITY
+        dy += self.y_velocity
+
+        # values used to let player touch screen edges and not be launched back
+        pushback_left = -30
+        pushback_right = -25
+
+        # ensure player stays on screen
+
+        if self.rect.left + dx < pushback_left:
+            dx = pushback_left - self.rect.left
+        if self.rect.right + dx > screen_width - pushback_right:
+            dx = screen_width - pushback_right - self.rect.right
+
+        # ensure player doesn't fall through the screen
+        if self.rect.bottom + dy > screen_height + 100:
+            dy = screen_height + 100 - self.rect.bottom
+
+        # ensure player can't fly out of the top of the screen
+        if self.rect.top + 120 + dy <= 0:
+            dy = -self.rect.top - 120
+
+        # update player position
+        self.rect.x += dx
+        self.rect.y += dy
+
+    def bullets(self):
+        keys = pygame.key.get_pressed()
+
+        # check if space bar is pressed
+        if keys[pygame.K_SPACE]:
+            if not self.space_pressed:
+                self.space_pressed = True
+                self.shoot.play()
+                # Calculate the bullet's initial position based on the plane's facing direction
+                bullet_offset = 165 if self.facing_right else - 185
+                bullet_position = pygame.math.Vector2(self.rect.centerx + bullet_offset, self.rect.centery)
+
+                # Create an instance of the bullet class
+                bullet = Bullet(bullet_position.x, bullet_position.y)
+                # Pass the plane's facing direction to the bullet
+                bullet.plane_facing_right = self.facing_right
+
+                # Add bullet sprite to the group
+                self.bullets_group.add(bullet)
+        else:
+            self.space_pressed = False
+
+    def attack(self, enemy):
+        for bullet in self.bullets_group:
+            # attack rect combined with attack rect 2 offset the y-axis so plane can only be attacked directly not from top or bottom
+            attack_rect = pygame.Rect(bullet.rect.centerx, bullet.rect.y - 120, bullet.rect.width, bullet.rect.height)
+            attack_rect2 = pygame.Rect(bullet.rect.centerx, bullet.rect.y + 120, bullet.rect.width, bullet.rect.height)
+            if attack_rect.colliderect(enemy.rect) and attack_rect2.colliderect(enemy.rect):
+                enemy.health -= 1
+                # Remove the bullet when it hits the enemy
+                self.bullets_group.remove(bullet)
+                break
+
+    def health_bar(self):
+        # colors
+        RED = (255, 0, 0)
+        GREEN = (0, 255, 0)
+        WHITE = (255, 255, 255)
+        # set health bar to be able to take damage
+        ratio = self.health / 100
+        # text for player health
+        player_win_text = font.render('Marco Pagot', True, (0, 0, 0))
+        screen.blit(player_win_text, (25, 0))
+        # health bar color layers
+        pygame.draw.rect(screen, WHITE, (10, 60, 250, 20))
+        pygame.draw.rect(screen, RED, (10, 60, 250, 20))
+        pygame.draw.rect(screen, GREEN, (10, 60, 250 * ratio, 20))
+
+    def update(self):
+        self.animate()
+        self.move(SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.attack(enemy)
+        self.bullets()
+        self.bullets_group.update()
+        # update horizontal position based on direction and speed
+        self.rect.x += self.direction.x * self.speed
+
+        # remove bullets that have gone off-screen
+        for bullet in self.bullets_group.copy():
+            if bullet.rect.left > SCREEN_WIDTH or bullet.collided:
+                self.bullets_group.remove(bullet)
+
+        # Update explosions and remove finished ones
+        explosions_to_remove = []  # Keep track of explosions to remove
+        for explosion in explosions_group:
+            explosion.update()
+            if not explosion.is_animating:
+                explosions_to_remove.append(explosion)
+
+        # Remove finished explosions
+        for explosion in explosions_to_remove:
+            explosions_group.remove(explosion)
+
+        # remove player and display losing text if player loses
+        if self.health <= 0:
+            self.alive = False
+            self.bullets_group.empty()
+            lose_txt = font.render('Sorry Soldier! You lost the war!', True, (0, 0, 0))
+            main_menu_txt = font.render('Press R Shift for Main Menu', True, (0, 0, 0))
+            restart_txt = font.render('Press Enter to Restart Game', True, (0, 0, 0))
+            quit_txt = font.render('Press Escape to Quit Game', True, (0, 0, 0))
+            screen.blit(lose_txt, (425, 0))
+            screen.blit(main_menu_txt, (470, 250))
+            screen.blit(restart_txt, (470, 350))
+            screen.blit(quit_txt, (470, 450))
+
+    def draw(self):
+        self.health_bar()
+        if self.alive:
+            screen.blit(self.image, self.rect)
+            for bullet in self.bullets_group:
+                bullet.draw(screen)
+
+# Enemy Plane class
+class EnemyPlane(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.plane_numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        self.max_planes = 10
+        self.current_plane_index = 0
+        self.import_enemy_plane_assets()
+        self.frame_index = 0
+        self.animation_speed = 0.15
+        self.image = self.animations['fly'][self.frame_index]
+        self.rect = self.image.get_rect()
+
+        # Set position
+        self.rect.center = [x, y]
+
+        # Movement
+        self.direction = pygame.math.Vector2(1, 1)
+        self.speed = 5
+        self.gravity = 0.5
+        self.y_velocity = 0
+
+        # Status
+        self.status = 'fly'
+        self.facing_right = False
+        self.attacking = True
+
+        # Bullet Timer
+        self.last_time_shot = 1000
+
+        # Health
+        self.health = 100
+        self.alive = True
+
+        # Bullets Sprite Group
+        self.enemy_bullets_group = pygame.sprite.Group()
+
+        # Shooting Sound
+        self.shoot = shot_fx
+
+    def import_enemy_plane_assets(self):
+        # path to list of enemy planes
+        current_plane_number = self.plane_numbers[self.current_plane_index]
+        enemy_plane_path = f'../assets/2D Animated Aircraft/Plane{current_plane_number}/'
+        self.animations = {'fly': []}
+
+        for animation in self.animations.keys():
+            full_path = enemy_plane_path + animation
+            self.animations[animation] = enemy_plane_import_folder(full_path)
+
+    def animate(self):
+        animation = self.animations[self.status]
+
+        # Loop over frame index
+        self.frame_index += self.animation_speed
+        if self.frame_index >= len(animation):
+            self.frame_index = 0
+
+    def move(self):
+        # Calculate movement
+        movement = self.direction * self.speed
+
+        # Update position
+        self.rect.x += movement.x
+        self.rect.y += movement.y
+
+        # Apply gravity
+        self.y_velocity += self.gravity
+        if self.y_velocity > 10:
+            self.y_velocity = 10
+
+        # Update image based on direction
+        if self.rect.left < 0 or self.rect.right > SCREEN_WIDTH:
+            # reverse direction on x-axis when reaching screen edges
+            self.direction.x *= -1
+            # reverse direction on y-axis when reaching screen edges
+            self.direction.y *= -1
+
+        # this line also updates image based on direction
+        if self.direction.x > 0:
+            self.image = pygame.transform.flip(self.animations[self.status][int(self.frame_index)], True, False)
+        else:
+            self.image = self.animations[self.status][int(self.frame_index)]
+
+        # ensure player doesn't fall through the screen
+        if self.rect.bottom + movement.y > SCREEN_HEIGHT:
+            movement.y = SCREEN_HEIGHT - self.rect.bottom
+            self.rect.y += movement.y
+
+        # ensure player can't fly out of the top of the screen
+        if self.rect.top + movement.y <= 0:
+            movement.y = -self.rect.top
+            self.rect.y += movement.y
+
+    def enemy_bullets(self):
+        # limit amount of shots enemy plane can take
+        if self.attacking and pygame.time.get_ticks() - self.last_time_shot > 1000:  # 1000 milliseconds = 1 second
+            self.last_time_shot = pygame.time.get_ticks()
+            self.shoot.play()
+            # Calculate the bullet's initial position based on the plane's facing direction
+            bullet_offset = 165 * self.direction.x if self.facing_right else -185 * -self.direction.x
+            bullet_position = pygame.math.Vector2(self.rect.centerx + bullet_offset, self.rect.centery)
+
+            # Create an instance of the bullet class
+            enemy_bullet = EnemyBullet(bullet_position.x, bullet_position.y)
+            # Pass the plane's facing direction to the bullet
+            enemy_bullet.plane_facing_right = self.direction.x > 0
+
+            # Adjust bullet's direction based on plane's flying direction
+            if not enemy_bullet.plane_facing_right:
+                enemy_bullet.direction.x *= -1
+
+            # Add bullet sprite to the group
+            self.enemy_bullets_group.add(enemy_bullet)
+
+    def attack(self, player):
+        for enemy_bullet in self.enemy_bullets_group:
+            # attack_rect combined with attack_rect 2 offset the x-axis so plane can only be attacked directly not from sides
+            attack_rect = pygame.Rect(enemy_bullet.rect.centerx, enemy_bullet.rect.y - 120, enemy_bullet.rect.width, enemy_bullet.rect.height)
+            attack_rect2 = pygame.Rect(enemy_bullet.rect.centerx, enemy_bullet.rect.y + 120, enemy_bullet.rect.width, enemy_bullet.rect.height)
+            if attack_rect.colliderect(player.rect) and attack_rect2.colliderect(player.rect):
+                player.health -= 1
+                self.enemy_bullets_group.remove(enemy_bullet)
+                break
+
+    def health_bar(self):
+        # colors for health bar
+        RED = (255, 0, 0)
+        GREEN = (0, 255, 0)
+        WHITE = (255, 255, 255)
+        # set health bar to be able to take damage
+        ratio = self.health / 100
+        # enemy plane health text
+        enemy_health_txt = font.render('Enemy Plane', True, (0, 0, 0))
+        screen.blit(enemy_health_txt, (1230, 0))
+        # health bar color layers
+        pygame.draw.rect(screen, WHITE, (1225, 60, 250, 20))
+        pygame.draw.rect(screen, RED, (1225, 60, 250, 20))
+        pygame.draw.rect(screen, GREEN, (1225, 60, 250 * ratio, 20))
+
+    def update(self):
+        self.animate()
+        self.move()
+        self.attack(player)
+        self.enemy_bullets()
+        self.enemy_bullets_group.update()
+
+        # remove bullets that have gone off-screen
+        for enemy_bullet in self.enemy_bullets_group.copy():
+            if enemy_bullet.rect.left > SCREEN_WIDTH:
+                self.enemy_bullets_group.remove(enemy_bullet)
+
+        # this code cycles planes each time health is depleted and spawns in next plane
+        if self.health <= 0:
+            self.current_plane_index += 1
+            if self.current_plane_index < self.max_planes:
+                self.import_enemy_plane_assets()
+                self.health = 100
+            # ensures planes stop spawning after 10th plane and draw win text for player
+            else:
+                self.alive = False
+                self.attacking = False
+                self.enemy_bullets_group.empty()
+                win_txt = font.render('Congrats Soldier! You won the war!', True, (0, 0, 0))
+                main_menu_txt = font.render('Press R Shift for Main Menu', True, (0, 0, 0))
+                restart_txt = font.render('Press Enter to Restart Game' , True, (0, 0, 0))
+                quit_txt = font.render('Press Escape to Quit Game' , True, (0, 0, 0))
+                screen.blit(win_txt, (425, 0))
+                screen.blit(main_menu_txt, (485, 250))
+                screen.blit(restart_txt, (485, 350))
+                screen.blit(quit_txt, (485, 450))
+
+    def draw(self):
+        if self.alive:
+            self.health_bar()
+            screen.blit(self.image, self.rect)
+            for enemy_bullet in self.enemy_bullets_group:
+                enemy_bullet.draw(screen)
+
+# background function
+def background():
+    global bg_scroll
+    for x in range(2000):
+        screen.blit(sky_resize, ((x * SCREEN_WIDTH) - bg_scroll * 0, 0))
+        screen.blit(far_clouds_resize, ((x * SCREEN_WIDTH) - bg_scroll * 0.5, 0))
+        screen.blit(near_clouds_resize, ((x * SCREEN_WIDTH) - bg_scroll * 0.6, 0))
+        screen.blit(far_mountains_resize, ((x * SCREEN_WIDTH) - bg_scroll * 0.7, 0))
+        screen.blit(mountains_resize, ((x * SCREEN_WIDTH) - bg_scroll * 0.8, 0))
+        screen.blit(trees_resize, ((x * SCREEN_WIDTH) - bg_scroll * 0.9, 0))
+
+    # Set speed of bg_scroll
+    bg_scroll += 1
+
+# main menu function
+def menu():
+    regular_menu_image = pygame.image.load('../images/menu.jpeg').convert_alpha()
+    menu_image = pygame.transform.scale(regular_menu_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
+    screen.blit(menu_image, (0, 0))
+    menu_txt = font.render('Press Enter to Start Game', True, (0, 0, 0))
+    menu_txt2 = font.render('Good Luck Soldier :) ', True, (0, 0, 0))
+    menu_txt3 = font.render('Destroy all 10 Enemy Planes to win the war', True , (0, 0, 0 ))
+    screen.blit(menu_txt, (200, 250))
+    screen.blit(menu_txt2, (250, 350))
+    screen.blit(menu_txt3, (50, 150))
+    pygame.display.update()
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN:
+                    return
+
+        # update display
+        pygame.display.update()
+
+# construct player and enemy class
+player = Plane(250, 150)
+enemy = EnemyPlane(1325, 150)
+
+# Event loop
+if __name__ == "__main__":
+    # call menu so it runs before main event loop
+    menu()
+    run = True
+    while run:
+        # Set frame rate
+        clock.tick(FPS)
+
+        # event handler
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                run = False
+
+        # call background
+        background()
+        # call bullets
+        player.bullets()
+        enemy.enemy_bullets()
+        # update and draw explosions
+        explosions_group.update()
+        explosions_group.draw(screen)
+        # update and draw
+        player.update()
+        enemy.update()
+        player.draw()
+        enemy.draw()
+
+        # restart the game if player wins
+        keys = pygame.key.get_pressed()
+        if not enemy.alive and keys[pygame.K_RETURN]:
+            player = Plane(250, 150)
+            enemy = EnemyPlane(1325, 150)
+
+        # restart the game if enemy wins
+        elif not player.alive and keys[pygame.K_RETURN]:
+            player = Plane(250, 150)
+            enemy = EnemyPlane(1325, 150)
+
+        # go back to main menu if game is over and player wins
+        elif not enemy.alive and keys[pygame.K_RSHIFT]:
+            menu()
+
+        # go back to main menu if game is over enemy wins
+        elif not player.alive and keys[pygame.K_RSHIFT]:
+            menu()
+
+        # allow player to quit game after win
+        elif not enemy.alive and keys[pygame.K_ESCAPE]:
+            run = False
+
+        # allow player to quit game after losing
+        elif not player.alive and keys[pygame.K_ESCAPE]:
+            run = False
+
+        # update display
+        pygame.display.update()
+
+    # Exit pygame
+    pygame.quit()
+    sys.exit()
